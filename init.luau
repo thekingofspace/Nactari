@@ -44,7 +44,6 @@ export type DiscordBot = {
 
     SendSocket:(self:DiscordBot, Packet:any) -> DiscordBot;
     SendContext:(self:DiscordBot, Method:string, Path:string, Body:any?, Headers:{[string]:any}?) -> any;
-    Drop: (self: DiscordBot) -> nil;
 }
 
 function BotMethods.On(self: DiscordBot & Private, Event: string, Callback: (Packet: any) -> nil)
@@ -212,3 +211,4 @@ function module.New(Intents: number, Token: string): DiscordBot
 end
 
 return module
+
