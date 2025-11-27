@@ -133,7 +133,7 @@ function BotMethods.Start(self: DiscordBot & Private)
             if not raw then continue end
 
             local Packet = serde.decode("json", raw)
-            self.__RST = Packet.s
+            self.__RST = Packet.s or 0
 
             if Packet.t then
                 local ev = Packet.t:lower()
@@ -167,7 +167,7 @@ function BotMethods.Start(self: DiscordBot & Private)
 
             self.__Gateway:send(serde.encode("json", {
                 op = 1;
-                d = self.__RST;
+                d = self.__RST or 0;
             }))
 
             if not self.__ConnectedEvents["heartbeat"] then continue end
