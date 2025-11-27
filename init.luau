@@ -133,7 +133,7 @@ function BotMethods.Start(self: DiscordBot & Private)
             if not raw then continue end
 
             local Packet = serde.decode("json", raw)
-            self.__RST = Packet.s or 0
+            self.__RST = Packet.s or self.__RST or 0
 
             if Packet.t then
                 local ev = Packet.t:lower()
