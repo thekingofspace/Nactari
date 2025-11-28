@@ -235,7 +235,7 @@ function BotMethods.Stop(self:DiscordBot & Private)
     self.__Started = false
 end
 
-function module.New(Intents, Token)
+function module.New(Intents, Token):DiscordBot
     local self = setmetatable({
         Intents = Intents;
         Token = Token;
