@@ -140,11 +140,11 @@ function BotMethods.Start(self: DiscordBot & Private)
                 local callback = self.__ConnectedEvents[ev]
 
                 if callback then
-                    task.defer(function()
+                    task.spawn(function()
                         callback(Packet.d)
                     end)
                 elseif self.__ConnectedEvents["undefined"] then
-                    task.defer(function()
+                    task.spawn(function()
                         self.__ConnectedEvents["undefined"](Packet.d, Packet.t)
                     end)
                 end
@@ -172,7 +172,7 @@ function BotMethods.Start(self: DiscordBot & Private)
 
             if not self.__ConnectedEvents["heartbeat"] then continue end
 
-            task.defer(function()
+            task.spawn(function()
                 self.__ConnectedEvents["heartbeat"](os.time())
             end)
         end
