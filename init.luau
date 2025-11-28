@@ -149,6 +149,12 @@ function BotMethods.Start(self: DiscordBot & Private)
                     end)
                 end
 
+                if self.__ConnectedEvents["signalstep"] then
+                    task.spawn(function()
+                        self.__ConnectedEvents["signalstep"]()
+                    end)
+                end
+
                 ev = nil::any
                 callback = nil::any
             end
