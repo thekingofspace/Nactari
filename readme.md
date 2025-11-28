@@ -1,43 +1,71 @@
 # Discord.luau
 
-This module provides a minimal backend for connecting to the Discord Gateway using Lune’s WebSocket and HTTP libraries. It handles the initial handshake, event dispatching, heartbeats, and basic REST requests.
+This module provides a minimal backend for connecting to the Discord Gateway using Lune’s WebSocket and HTTP libraries. It handles identification, resumes, event routing, heartbeats, and basic REST requests. It is intended as a thin packet layer — **not** a full Discord client.
 
-The bot connects directly to the Discord Gateway URL and identifies using the provided token and intents. After connecting, it listens for incoming packets and routes them to any registered event callbacks. Heartbeats are automatically sent using the interval provided by Discord.
+The bot connects to the Discord Gateway URL and identifies using the provided token and intents. If session data exists, it attempts to resume automatically. After connecting, it listens for incoming packets, updates sequence numbers, and dispatches events to any registered handlers. Heartbeats are sent according to the interval provided by Discord.
 
 ## Events
 
-Events can be registered using `bot:On("event", callback)`.
-All event names are normalized to lowercase.
+Events are registered using:
+`bot:On("event", callback)`
 
-Supported event routing:
+Event names are always converted to lowercase.
 
-* Any official Discord Gateway event (e.g. MESSAGE_CREATE, READY) if a callback is registered.
-* automatic reconnection or session recovery.
+Triggered events:
+
+* Any official Discord Gateway event (e.g. MESSAGE_CREATE, READY) if a handler exists.
 * `undefined` — fired when an event is received with no matching handler.
-* `heartbeat` — fired each time a heartbeat is sent.
-* `signalstep` — fired whenever *any* event is processed.
-* `resume` — fired when resuming the socket
+* `heartbeat` — fired whenever a heartbeat is sent.
+* `signalstep` — fired every time *any* event is processed.
+* `resume` — fired after sending a resume request during reconnect logic.
 
-What this backend does **not** handle:
+## What This Backend Handles
+
+* Connecting to the Discord Gateway.
+* Identifying and resuming sessions.
+* Automatic heartbeat loop.
+* Dispatching events to registered callbacks.
+* Sending packets through the WebSocket.
+* Performing basic REST API requests.
+* Updating session ID, sequence number, and resume URL.
+
+## What This Backend Does **Not** Handle
 
 * No shard management.
-* No REST rate-limit handling or request queuing.
-* No caching or internal state tracking.
+* No REST rate-limit buckets or global queue.
+* No caching or internal Discord state tracking.
+* No presence updates or status management. (Refer to SendSocket for that)
+* No automatic full reconnection logic beyond Discord’s OP 7/9 resume system.
 
 ## REST Requests
 
-`SendContext(method, path, body?, headers?)` performs a simple REST request to Discord’s HTTP API.
-It automatically includes bot authorization headers and JSON-encodes table bodies.
+`SendContext(method, path, body?, headers?)` sends a REST request to the Discord REST API.
 
-`SendSocket(packet)` Sends a packet to the socket.
-It automatically JSON-encodes table bodies.
+Includes:
 
-Errors with status codes above 400 raise an exception. Responses are JSON-decoded when possible.
+* Bot authorization header
+* JSON encoding of table bodies
+* JSON decoding on successful responses
+
+Errors with `statusCode >= 400` raise an exception.
+
+## WebSocket Sending
+
+`SendSocket(packet)`
+Encodes the packet as JSON and sends it through the active WebSocket.
 
 ## Starting and Stopping
 
-`Start()` opens a WebSocket connection, identifies with Discord, initializes event listeners, and begins the heartbeat loop. It also loads the bot’s application ID from `/applications/@me`.
+`Start()`:
 
-`Stop()` cancels all running tasks and closes the WebSocket connection.
+* Connects to the Gateway or resume URL
+* Sends Identify or Resume depending on session state
+* Begins event handler loop
+* Starts heartbeat loop
+* Loads the bot’s application ID from `/applications/@me`
 
-This module is intended as a thin layer for sending and receiving packets — not a full-featured Discord client.
+`Stop()`:
+
+* Cancels all running tasks
+* Closes the WebSocket
+* Resets internal state
