@@ -19,10 +19,94 @@ local StandardPack = {
     }
 }
 
+local Chain = {}
+Chain.__index = Chain
+
+function Chain.new(callback)
+    return setmetatable({
+        _callback = callback,
+        _catch = nil,
+        _next = nil,
+    }, Chain)
+end
+
+function Chain:AndThen(fn)
+    local nextChain = Chain.new(fn)
+    self._next = nextChain
+    return nextChain
+end
+
+function Chain:Await()
+    local thread = coroutine.running()
+    if not thread then
+        error("Chain:Await() must be called inside a coroutine.")
+    end
+
+    table.insert(self._awaiting, thread)
+    return coroutine.yield()
+end
+
+function Chain:Catch(fn)
+    local nextChain = Chain.new(nil)
+    nextChain._catch = fn
+    self._next = nextChain
+    return nextChain
+end
+
+function Chain:_execute(...):...any
+    local ok, results = true, nil
+
+    if self._callback then
+        ok, results = pcall(function(...)
+            return { self._callback(...) }
+        end, ...)
+    else
+        results = { ... }
+    end
+
+    if not ok then
+        return self:_error(results, ...)
+    end
+
+    if self._next then
+        self._next:_execute(table.unpack(results))
+    end
+
+    return
+end
+
+function Chain:_error(err, ...)
+    if self._catch then
+        local ok, results = pcall(function()
+            return { self._catch(err) }
+        end)
+
+        if self._next then
+            if ok then
+                self._next:_execute(table.unpack(results))
+            else
+                self._next:_error(results, ...)
+            end
+        end
+
+        return
+    end
+
+    if self._next then
+        self._next:_error(err, ...)
+    end
+end
+
 local module = {}
 
 local BotMethods = {}
 BotMethods.__index = BotMethods
+
+export type Chain = {
+    AndThen: (self: Chain, fn: (...any) -> ...any) -> Chain,
+    Catch: (self: Chain, fn: (err: any, ...any) -> ...any) -> Chain,
+    Await:(self:Chain) -> nil
+}
 
 export type Private = {
     __ConnectedEvents: {};
@@ -50,7 +134,7 @@ export type DiscordBot = {
     ShardID: number;
     ShardCount: number;
 
-    On:(self:DiscordBot, Event:string, Callback:(Packet:any, Event:string?) -> nil) -> DiscordBot;
+    On:(self:DiscordBot, Event:string, Callback:(Packet:any, Event:string?) -> nil) -> Chain;
     Start:(self:DiscordBot) -> DiscordBot;
     Stop:(self:DiscordBot) -> DiscordBot;
 
@@ -58,18 +142,17 @@ export type DiscordBot = {
     SendContext:(self:DiscordBot, Method:string, Path:string, Body:any?, Headers:{[string]:any}?) -> any;
 
     Fracture:(self:DiscordBot, ShardID:number, ShardCount:number) -> DiscordBot;
-    GetShards:(self:DiscordBot) -> { DiscordBot }
+    GetShards:(self:DiscordBot) -> { DiscordBot };
+    Grab:(self:DiscordBot, Event:string) -> Chain?;
 }
 
 function BotMethods.__Identify(self)
     local Packet = table.clone(StandardPack)
     Packet.d.token = self.Token
     Packet.d.intents = self.Intents
-
     Packet.d.shard = { self.ShardID, self.ShardCount }
 
     self.__Gateway:send(serde.encode("json", Packet))
-    Packet = nil
 end
 
 function BotMethods.Fracture(self:DiscordBot & Private, ShardID:number, ShardCount:number)
@@ -80,15 +163,18 @@ function BotMethods.Fracture(self:DiscordBot & Private, ShardID:number, ShardCou
     end
 
     NewBot.AppID = self.AppID
-
     table.insert(self.__ShardList, NewBot)
 
     return NewBot
 end
 
 function BotMethods.On(self, Event, Callback)
-    self.__ConnectedEvents[Event:lower()] = Callback
-    return self
+    local ev = Event:lower()
+
+    local chain = Chain.new(Callback)
+    self.__ConnectedEvents[ev] = chain
+
+    return chain
 end
 
 function BotMethods.SendSocket(self, Packet)
@@ -96,6 +182,10 @@ function BotMethods.SendSocket(self, Packet)
         self.__Gateway:send(serde.encode(Packet))
     end
     return self
+end
+
+function BotMethods.Grab(self, Event:string): Chain?
+    return self.__ConnectedEvents[Event:lower()]
 end
 
 function BotMethods.SendContext(self, Method, Path, Body, Headers)
@@ -134,6 +224,7 @@ function BotMethods.SendContext(self, Method, Path, Body, Headers)
     return ok and decoded or ReturnPack.body
 end
 
+
 function BotMethods.__Resume(self)
     self.__Gateway:send(serde.encode("json", {
         op = 6,
@@ -144,9 +235,10 @@ function BotMethods.__Resume(self)
         }
     }))
 
-    if self.__ConnectedEvents["resume"] then
+    local chain = self.__ConnectedEvents["resume"]
+    if chain then
         task.spawn(function()
-            self.__ConnectedEvents["resume"]()
+            chain:_execute()
         end)
     end
 end
@@ -184,32 +276,33 @@ function BotMethods.Start(self)
             end
 
             if Packet.op == 9 then
+                task.wait(1)
                 if Packet.d == true then
-                    task.wait(1)
                     self:__Resume()
                 else
-                    task.wait(1)
                     self:__Identify()
                 end
             end
 
             if Packet.t then
                 local ev = Packet.t:lower()
-                local fn = self.__ConnectedEvents[ev]
+                local chain = self.__ConnectedEvents[ev]
 
-                if fn then
+                if chain then
                     task.spawn(function()
-                        fn(Packet.d, Packet.t)
+                        chain:_execute(Packet.d, Packet.t)
                     end)
                 elseif self.__ConnectedEvents["undefined"] then
+                    local undef = self.__ConnectedEvents["undefined"]
                     task.spawn(function()
-                        self.__ConnectedEvents["undefined"](Packet.d, Packet.t)
+                        undef:_execute(Packet.d, Packet.t)
                     end)
                 end
 
-                if self.__ConnectedEvents["signalstep"] then
+                local stepChain = self.__ConnectedEvents["signalstep"]
+                if stepChain then
                     task.spawn(function()
-                        self.__ConnectedEvents["signalstep"]()
+                        stepChain:_execute()
                     end)
                 end
             end
@@ -227,9 +320,10 @@ function BotMethods.Start(self)
                 d = self.__RST or 0;
             }))
 
-            if self.__ConnectedEvents["heartbeat"] then
+            local chain = self.__ConnectedEvents["heartbeat"]
+            if chain then
                 task.spawn(function()
-                    self.__ConnectedEvents["heartbeat"](os.time())
+                    chain:_execute(os.time())
                 end)
             end
         end
