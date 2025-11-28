@@ -14,7 +14,8 @@ local StandardPack = {
             os = "linux";
             browser = "noctari_prime";
             device = "noctari_prime";
-        }
+        },
+        shard = {0, 1};
     }
 }
 
@@ -34,7 +35,10 @@ export type Private = {
     __SessionID: string?;
     __GatewayURL: string?;
     __Resume:(self:Private) -> any;
-    __Identify:(self:Private) -> any
+    __Identify:(self:Private) -> any;
+
+    ShardID: number;
+    ShardCount: number;
 }
 
 export type DiscordBot = {
@@ -42,15 +46,43 @@ export type DiscordBot = {
     Token: string;
     AppID: number;
 
-    On: (self: DiscordBot, Event: string, Callback: (Packet: any, Event:string?) -> nil) -> DiscordBot;
-    Start: (self: DiscordBot) -> DiscordBot;
-    Stop: (self: DiscordBot) -> DiscordBot;
+    ShardID: number;
+    ShardCount: number;
+
+    On:(self:DiscordBot, Event:string, Callback:(Packet:any, Event:string?) -> nil) -> DiscordBot;
+    Start:(self:DiscordBot) -> DiscordBot;
+    Stop:(self:DiscordBot) -> DiscordBot;
 
     SendSocket:(self:DiscordBot, Packet:any) -> DiscordBot;
     SendContext:(self:DiscordBot, Method:string, Path:string, Body:any?, Headers:{[string]:any}?) -> any;
+
+    Fracture:(self:DiscordBot, ShardID:number, ShardCount:number) -> DiscordBot;
 }
 
-function BotMethods.On(self: DiscordBot & Private, Event: string, Callback)
+function BotMethods.__Identify(self)
+    local Packet = table.clone(StandardPack)
+    Packet.d.token = self.Token
+    Packet.d.intents = self.Intents
+
+    Packet.d.shard = { self.ShardID, self.ShardCount }
+
+    self.__Gateway:send(serde.encode("json", Packet))
+    Packet = nil
+end
+
+function BotMethods.Fracture(self:DiscordBot & Private, ShardID:number, ShardCount:number)
+    local NewBot = module.New(self.Intents, self.Token, ShardID, ShardCount)
+
+    for name, callback in pairs(self.__ConnectedEvents) do
+        NewBot.__ConnectedEvents[name] = callback
+    end
+
+    NewBot.AppID = self.AppID
+
+    return NewBot
+end
+
+function BotMethods.On(self, Event, Callback)
     self.__ConnectedEvents[Event:lower()] = Callback
     return self
 end
@@ -89,8 +121,6 @@ function BotMethods.SendContext(self, Method, Path, Body, Headers)
         error(`[ERROR CODE {ReturnPack.statusCode}]: {ReturnPack.statusMessage}, \n\n {ReturnPack.body}`)
     end
 
-    Packet = nil::any
-
     if not ReturnPack.body then return nil end
 
     local ok, decoded = pcall(function()
@@ -100,15 +130,7 @@ function BotMethods.SendContext(self, Method, Path, Body, Headers)
     return ok and decoded or ReturnPack.body
 end
 
-function BotMethods.__Identify(self)
-    local Packet = table.clone(StandardPack)
-    Packet.d.token = self.Token
-    Packet.d.intents = self.Intents
-    self.__Gateway:send(serde.encode("json", Packet))
-    Packet = nil
-end
-
-function BotMethods.__Resume(self:DiscordBot & Private)
+function BotMethods.__Resume(self)
     self.__Gateway:send(serde.encode("json", {
         op = 6,
         d = {
@@ -125,7 +147,7 @@ function BotMethods.__Resume(self:DiscordBot & Private)
     end
 end
 
-function BotMethods.Start(self: DiscordBot & Private)
+function BotMethods.Start(self)
     if self.__Started then return end
     self.__Started = true
 
@@ -142,9 +164,6 @@ function BotMethods.Start(self: DiscordBot & Private)
     local Hello = serde.decode("json", Gateway:next())
     self.__HeartCount = Hello.d.heartbeat_interval / 1000
 
-    Gateway = nil
-    url = nil
-
     table.insert(self.__Tasks, task.spawn(function()
         while self.__Started and self.__Gateway do
             local raw = self.__Gateway:next()
@@ -152,7 +171,7 @@ function BotMethods.Start(self: DiscordBot & Private)
 
             local Packet = serde.decode("json", raw)
             self.__RST = Packet.s or self.__RST or 0
-            raw = nil
+
             if Packet.t == "READY" then
                 self.__SessionID = Packet.d.session_id
                 if Packet.d.resume_gateway_url then
@@ -189,9 +208,6 @@ function BotMethods.Start(self: DiscordBot & Private)
                         self.__ConnectedEvents["signalstep"]()
                     end)
                 end
-
-                ev = nil
-                fn = nil
             end
         end
     end))
@@ -221,8 +237,7 @@ function BotMethods.Start(self: DiscordBot & Private)
     return self
 end
 
-
-function BotMethods.Stop(self:DiscordBot & Private)
+function BotMethods.Stop(self)
     for _, t in ipairs(self.__Tasks) do
         task.cancel(t)
     end
@@ -235,10 +250,13 @@ function BotMethods.Stop(self:DiscordBot & Private)
     self.__Started = false
 end
 
-function module.New(Intents, Token):DiscordBot
+function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:number?):DiscordBot
     local self = setmetatable({
         Intents = Intents;
         Token = Token;
+
+        ShardID = ShardID or 0;
+        ShardCount = ShardCount or 1;
 
         __Tasks = {};
         __ConnectedEvents = {};
