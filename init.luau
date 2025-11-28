@@ -36,6 +36,7 @@ export type Private = {
     __GatewayURL: string?;
     __Resume:(self:Private) -> any;
     __Identify:(self:Private) -> any;
+    __ShardList:{DiscordBot};
 
     ShardID: number;
     ShardCount: number;
@@ -57,6 +58,7 @@ export type DiscordBot = {
     SendContext:(self:DiscordBot, Method:string, Path:string, Body:any?, Headers:{[string]:any}?) -> any;
 
     Fracture:(self:DiscordBot, ShardID:number, ShardCount:number) -> DiscordBot;
+    GetShards:(self:DiscordBot) -> { DiscordBot }
 }
 
 function BotMethods.__Identify(self)
@@ -78,6 +80,8 @@ function BotMethods.Fracture(self:DiscordBot & Private, ShardID:number, ShardCou
     end
 
     NewBot.AppID = self.AppID
+
+    table.insert(self.__ShardList, NewBot)
 
     return NewBot
 end
@@ -250,6 +254,10 @@ function BotMethods.Stop(self)
     self.__Started = false
 end
 
+function BotMethods.GetShards(self)
+    return self.__ShardList
+end
+
 function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:number?):DiscordBot
     local self = setmetatable({
         Intents = Intents;
@@ -265,6 +273,8 @@ function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:nu
         __SessionID = nil;
         __GatewayURL = nil;
         __RST = 0;
+
+        __ShardList = {};
     }, BotMethods)
 
     return self
