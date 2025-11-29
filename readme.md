@@ -23,7 +23,7 @@ Event names are normalized to lowercase.
   Fired when an event has no handler.
 * **`heartbeat`**
   Fired each time a heartbeat is sent.
-* **`signalstep`**
+* **`signal_step`**
   Fired once for *every* packet processed.
 * **`resume`**
   Fired after sending a resume packet (OP 6).
