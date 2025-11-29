@@ -27,12 +27,15 @@ local function cloneNode(node, parent)
         _callback    = node._callback,
         _catch       = node._catch,
         _halt        = node._halt,
+        _throw       = node._throw,
+
         _next        = nil,
         _parent      = parent,
 
         _lastResults = nil,
         _awaiting    = nil,
         _root        = node._root or node,
+        _catch_ran   = false,
 
         __destroyed  = false,
     }, Chain)
@@ -44,23 +47,24 @@ local function cloneNode(node, parent)
     return new
 end
 
-
 function Chain.new(callback)
     local root = setmetatable({
         _callback = callback,
         _catch    = nil,
         _halt     = false,
+        _throw    = nil,
         _next     = nil,
 
         _waiters  = {},
         _parent   = nil,
-
         _root     = nil,
+        _catch_ran = false,
     }, Chain)
 
     root._root = root
     return root
 end
+
 
 function Chain:AndThen(fn)
     local next = Chain.new(fn)
@@ -82,6 +86,15 @@ end
 function Chain:Halt()
     local next = Chain.new(nil)
     next._halt = true
+    self._next = next
+    next._parent = self
+    next._root = self._root
+    return next
+end
+
+function Chain:Throw(fn)
+    local next = Chain.new(nil)
+    next._throw = fn
     self._next = next
     next._parent = self
     next._root = self._root
@@ -114,33 +127,34 @@ end
 local function destroyChain(runtime)
     if runtime.__destroyed then return end
     runtime.__destroyed = true
-    
+
     if runtime._next then
         destroyChain(runtime._next)
     end
-    
+
     runtime._callback = nil
     runtime._catch = nil
+    runtime._throw = nil
     runtime._next = nil
+
     runtime._parent = nil
     runtime._lastResults = nil
     runtime._awaiting = nil
     runtime._root = nil
-    
+    runtime._catch_ran = nil
+
     if runtime._waiters then
         runtime._waiters = nil
     end
 end
 
-
 function Chain:_finish(results)
     if self.__destroyed then return end
 
     local root = self._root
-    
     if root and root._waiters then
         local waiter = table.remove(root._waiters, 1)
-        
+
         if waiter then
             if results and #results > 0 then
                 coroutine.resume(waiter.thread, table.unpack(results))
@@ -148,7 +162,7 @@ function Chain:_finish(results)
                 coroutine.resume(waiter.thread)
             end
         end
-        
+
         if #root._waiters == 0 then
             root._waiters = {}
         end
@@ -163,30 +177,37 @@ function Chain:_passError(err)
 
     if self._next and self._next._catch then
         local last = self._lastResults or {}
-        local use
 
         local ok, catchResults = pcall(function()
             return { self._next._catch(err, table.unpack(last)) }
         end)
 
         if ok then
-            use = (catchResults and #catchResults > 0) and catchResults or last
+            self._next._catch_ran = true
+
+            local use = (catchResults and #catchResults > 0)
+                and catchResults
+                or last
+
+            if self._next._next
+                and self._next._next._halt
+                and self._next._catch_ran == true
+            then
+                return self:_finish(use)
+            end
+
+            if self._next._next then
+                return self._next._next:_execute(table.unpack(use))
+            end
+
+            return self:_finish(use)
         else
             if self._next._next then
                 return self._next:_passError(catchResults)
             end
+
             return self:_finish(last)
         end
-
-        if self._next._next and self._next._next._halt then
-            return self:_finish(use)
-        end
-
-        if self._next._next then
-            return self._next._next:_execute(table.unpack(use))
-        end
-
-        return self:_finish(use)
     end
 
     if self._next then
@@ -197,17 +218,33 @@ function Chain:_passError(err)
 end
 
 
-
 function Chain:_execute(...)
-    if self.__destroyed then return end
 
-    if self._halt then
-        return self:_finish(self._lastResults)
-    end
+    if self.__destroyed then return end
 
     local incoming = { ... }
     if #incoming > 0 then
         self._lastResults = incoming
+    end
+
+    if self._halt then
+        local p = self._parent
+
+        if p and p._catch and p._catch_ran == true then
+            return self:_finish(self._lastResults)
+        end
+    end
+
+    if self._throw then
+        local parentResults = (self._parent and self._parent._lastResults) or {}
+
+        local ok, continue = pcall(function()
+            return self._throw(table.unpack(parentResults))
+        end)
+
+        if not ok or not continue then
+            return self:_finish(parentResults)
+        end
     end
 
     local ok, results
@@ -227,10 +264,6 @@ function Chain:_execute(...)
         end
 
         if self._next then
-            if self._next._halt then
-                return self:_finish(self._lastResults)
-            end
-
             return self._next:_execute(table.unpack(results))
         end
 
@@ -239,6 +272,7 @@ function Chain:_execute(...)
 
     return self:_passError(results)
 end
+
 
 function Chain:Run(...)
     local runtime = self:spawn()
@@ -254,10 +288,9 @@ function Chain:Destroy()
             self._waiters = {}
         end
     end
-    
+
     destroyChain(self)
 end
-
 
 local module = {}
 
@@ -268,7 +301,8 @@ export type Chain = {
     AndThen: (self: Chain, fn: (...any) -> ...any) -> Chain,
     Catch: (self: Chain, fn: (err: any, ...any) -> ...any) -> Chain,
     Await:(self:Chain) -> ...any;
-    Halt:(self:Chain) -> Chain
+    Halt:(self:Chain) -> Chain;
+    Throw:(self:Chain, fn: (err: any, ...any) -> boolean) -> Chain
 }
 
 export type Private = {
