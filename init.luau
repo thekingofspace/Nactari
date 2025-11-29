@@ -22,58 +22,180 @@ local StandardPack = {
 local Chain = {}
 Chain.__index = Chain
 
-function Chain.new(callback)
-    return setmetatable({
-        _callback = callback,
-        _catch = nil,
-        _halt = false,
-        _next = nil,
+local function cloneNode(node, parent)
+    local new = setmetatable({
+        _callback    = node._callback,
+        _catch       = node._catch,
+        _halt        = node._halt,
+        _next        = nil,
+        _parent      = parent,
 
         _lastResults = nil,
-        _awaiting = {},
+        _awaiting    = nil,
+        _root        = node._root or node,
+
+        __destroyed  = false,
     }, Chain)
+
+    if node._next then
+        new._next = cloneNode(node._next, new)
+    end
+
+    return new
+end
+
+
+function Chain.new(callback)
+    local root = setmetatable({
+        _callback = callback,
+        _catch    = nil,
+        _halt     = false,
+        _next     = nil,
+
+        _waiters  = {},
+        _parent   = nil,
+
+        _root     = nil,
+    }, Chain)
+
+    root._root = root
+    return root
 end
 
 function Chain:AndThen(fn)
-    local nextChain = Chain.new(fn)
-    self._next = nextChain
-    return nextChain
+    local next = Chain.new(fn)
+    self._next = next
+    next._parent = self
+    next._root = self._root
+    return next
 end
 
 function Chain:Catch(fn)
-    local nextChain = Chain.new(nil)
-    nextChain._catch = fn
-    self._next = nextChain
-    return nextChain
+    local next = Chain.new(nil)
+    next._catch = fn
+    self._next = next
+    next._parent = self
+    next._root = self._root
+    return next
 end
 
 function Chain:Halt()
-    local nextChain = Chain.new(nil)
-    nextChain._halt = true
-    self._next = nextChain
-    return nextChain
+    local next = Chain.new(nil)
+    next._halt = true
+    self._next = next
+    next._parent = self
+    next._root = self._root
+    return next
 end
 
+
 function Chain:Await()
-    local thread = coroutine.running()
-    if not thread then
-        error("Chain:Await() must be called inside a coroutine.")
+    if self._root ~= self then
+        error("Await() must be called on the base chain only.")
     end
 
-    table.insert(self._awaiting, thread)
+    local thread = coroutine.running()
+    if not thread then
+        error("Await() must be inside a coroutine.")
+    end
 
-    local r = { coroutine.yield() }
+    local waiter = { thread = thread }
+    table.insert(self._waiters, waiter)
 
-    if #r == 0 then
-        if self._lastResults then
-            return table.unpack(self._lastResults)
+    return coroutine.yield()
+end
+
+
+function Chain:spawn()
+    return cloneNode(self._root, nil)
+end
+
+
+local function destroyChain(runtime)
+    if runtime.__destroyed then return end
+    runtime.__destroyed = true
+    
+    if runtime._next then
+        destroyChain(runtime._next)
+    end
+    
+    runtime._callback = nil
+    runtime._catch = nil
+    runtime._next = nil
+    runtime._parent = nil
+    runtime._lastResults = nil
+    runtime._awaiting = nil
+    runtime._root = nil
+    
+    if runtime._waiters then
+        runtime._waiters = nil
+    end
+end
+
+
+function Chain:_finish(results)
+    if self.__destroyed then return end
+
+    local root = self._root
+    
+    if root and root._waiters then
+        local waiter = table.remove(root._waiters, 1)
+        
+        if waiter then
+            if results and #results > 0 then
+                coroutine.resume(waiter.thread, table.unpack(results))
+            else
+                coroutine.resume(waiter.thread)
+            end
+        end
+        
+        if #root._waiters == 0 then
+            root._waiters = {}
         end
     end
 
-    return table.unpack(r)
+    destroyChain(self)
+    return results
 end
 
+function Chain:_passError(err)
+    if self.__destroyed then return end
+
+    if self._next and self._next._catch then
+        local use
+        local last = self._lastResults or {}
+
+        local ok, catchResults = pcall(function()
+            return { self._next._catch(err, table.unpack(last)) }
+        end)
+
+        if ok then
+            use = (catchResults and #catchResults > 0) and catchResults or last
+        else
+            if self._next._next then
+                return self._next:_passError(catchResults)
+            end
+            return self:_finish(last)
+        end
+
+        if self._next._next then
+            return self._next._next:_execute(table.unpack(use))
+        end
+
+        return self:_finish(use)
+    end
+
+    if self._next then
+        return self._next:_passError(err)
+    end
+
+    return self:_finish(self._lastResults or {})
+end
+
+
 function Chain:_execute(...)
+    if self.__destroyed then return end
+
     local incoming = { ... }
     if #incoming > 0 then
         self._lastResults = incoming
@@ -89,78 +211,40 @@ function Chain:_execute(...)
         results = incoming
     end
 
-    if ok and results and #results > 0 then
-        self._lastResults = results
-    end
-
-    if #self._awaiting > 0 then
-        local used = (ok and results and #results > 0)
-            and results
-            or self._lastResults
-
-        for _, thread in ipairs(self._awaiting) do
-            coroutine.resume(thread, table.unpack(used))
-        end
-        self._awaiting = {}
-    end
-
     if ok then
+        if results and #results > 0 then
+            self._lastResults = results
+        end
+
         if self._next then
             if self._next._halt then
-                if self._next._next then
-                    return self._next._next:_execute(table.unpack(results))
-                end
-                return
+                return self:_finish(self._lastResults)
             end
             return self._next:_execute(table.unpack(results))
         end
-        return
+
+        return self:_finish(self._lastResults)
     end
 
     return self:_passError(results)
 end
 
+function Chain:Run(...)
+    local runtime = self:spawn()
+    return runtime:_execute(...)
+end
 
-function Chain:_passError(err)
-    if self._next and self._next._catch then
-        local last = self._lastResults or {}
-
-        local ok, catchResults = pcall(function()
-            return { self._next._catch(err, table.unpack(last)) }
-        end)
-
-        if self._next._next and self._next._next._halt then
-            return
-        end
-
-        local useResults
-
-        if ok then
-            if catchResults and #catchResults > 0 then
-                useResults = catchResults
-                self._lastResults = catchResults
-            else
-                useResults = last
+function Chain:Destroy()
+    if self._root == self then
+        if self._waiters then
+            for _, waiter in ipairs(self._waiters) do
+                pcall(coroutine.resume, waiter.thread, nil)
             end
-        else
-            if self._next._next then
-                return self._next._next:_passError(catchResults)
-            end
-            return
+            self._waiters = {}
         end
-
-        if self._next._next then
-            return self._next._next:_execute(table.unpack(useResults))
-        end
-
-        return
     end
-
-    if self._next then
-        return self._next:_passError(err)
-    end
-
-    return
+    
+    destroyChain(self)
 end
 
 
@@ -358,19 +442,19 @@ function BotMethods.Start(self)
 
                 if chain then
                     task.spawn(function()
-                        chain:_execute(Packet.d, ev)
+                        chain:Run(Packet.d, ev)
                     end)
                 elseif self.__ConnectedEvents["undefined"] then
                     local undef = self.__ConnectedEvents["undefined"]
                     task.spawn(function()
-                        undef:_execute(Packet.d, ev)
+                        undef:Run(Packet.d, ev)
                     end)
                 end
 
                 local stepChain = self.__ConnectedEvents["signalstep"]
                 if stepChain then
                     task.spawn(function()
-                        stepChain:_execute()
+                        stepChain:Run()
                     end)
                 end
             end
@@ -391,7 +475,7 @@ function BotMethods.Start(self)
             local chain = self.__ConnectedEvents["heartbeat"]
             if chain then
                 task.spawn(function()
-                    chain:_execute(os.time())
+                    chain:Run(os.time())
                 end)
             end
         end
