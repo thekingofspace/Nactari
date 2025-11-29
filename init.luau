@@ -162,8 +162,8 @@ function Chain:_passError(err)
     if self.__destroyed then return end
 
     if self._next and self._next._catch then
-        local use
         local last = self._lastResults or {}
+        local use
 
         local ok, catchResults = pcall(function()
             return { self._next._catch(err, table.unpack(last)) }
@@ -176,6 +176,10 @@ function Chain:_passError(err)
                 return self._next:_passError(catchResults)
             end
             return self:_finish(last)
+        end
+
+        if self._next._next and self._next._next._halt then
+            return self:_finish(use)
         end
 
         if self._next._next then
@@ -193,8 +197,13 @@ function Chain:_passError(err)
 end
 
 
+
 function Chain:_execute(...)
     if self.__destroyed then return end
+
+    if self._halt then
+        return self:_finish(self._lastResults)
+    end
 
     local incoming = { ... }
     if #incoming > 0 then
@@ -202,6 +211,7 @@ function Chain:_execute(...)
     end
 
     local ok, results
+
     if self._callback then
         ok, results = pcall(function(...)
             return { self._callback(...) }
@@ -220,6 +230,7 @@ function Chain:_execute(...)
             if self._next._halt then
                 return self:_finish(self._lastResults)
             end
+
             return self._next:_execute(table.unpack(results))
         end
 
