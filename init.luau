@@ -278,12 +278,16 @@ export type Private = {
     __Gateway: net.WebSocket;
     __Started: boolean;
     __Tasks:{any};
+    __ProccessorTask:any;
 
     __SessionID: string?;
     __GatewayURL: string?;
     __Resume:(self:Private) -> any;
     __Identify:(self:Private) -> any;
+    __SpawnChain:(self:Private, ...any) -> any;
     __ShardList:{DiscordBot};
+    __ChainsToRun:{Chain};
+    __ActiveChainThreads:{};
 
     ShardID: number;
     ShardCount: number;
@@ -400,13 +404,11 @@ function BotMethods.__Resume(self)
 
     local chain = self.__ConnectedEvents["resume"]
     if chain then
-        task.spawn(function()
-            chain:_execute()
-        end)
+        self:__SpawnChain(chain)
     end
 end
 
-function BotMethods.Start(self)
+function BotMethods.Start(self:DiscordBot & Private)
     if self.__Started then return end
     self.__Started = true
 
@@ -452,14 +454,9 @@ function BotMethods.Start(self)
                 local chain = self.__ConnectedEvents[ev]
 
                 if chain then
-                    task.spawn(function()
-                        chain:Run(Packet.d, ev)
-                    end)
+                    self:__SpawnChain(chain, Packet.d, ev)
                 elseif self.__ConnectedEvents["undefined"] then
-                    local undef = self.__ConnectedEvents["undefined"]
-                    task.spawn(function()
-                        undef:Run(Packet.d, ev)
-                    end)
+                    self:__SpawnChain(self.__ConnectedEvents["undefined"], Packet.d, ev)
                 end
 
                 local stepChain = self.__ConnectedEvents["signalstep"]
@@ -485,9 +482,7 @@ function BotMethods.Start(self)
 
             local chain = self.__ConnectedEvents["heartbeat"]
             if chain then
-                task.spawn(function()
-                    chain:Run(os.time())
-                end)
+                self:__SpawnChain(chain, os.time())
             end
         end
     end))
@@ -495,10 +490,39 @@ function BotMethods.Start(self)
     local InitialPacket = self:SendContext("GET", "applications/@me")
     self.AppID = InitialPacket.id
 
+    self.__ProccessorTask = task.spawn(function()
+        while true do
+            task.wait()
+
+            local item = table.remove(self.__ChainsToRun, 1)
+            if item then
+                local thread = task.spawn(function()
+                    item[1]:Run(unpack(item[2]))
+                end)
+
+                self.__ActiveChainThreads[thread] = true
+
+                task.spawn(function()
+                    task.wait()
+
+                    while coroutine.status(thread) ~= "dead" do
+                        task.wait()
+                    end
+
+                    self.__ActiveChainThreads[thread] = nil
+                end)
+            end
+        end
+    end)
+
     return self
 end
 
-function BotMethods.Stop(self)
+function BotMethods.__SpawnChain(self:DiscordBot & Private, Chain, ...)
+    table.insert(self.__ChainsToRun, {Chain, {...}}::any)
+end
+
+function BotMethods.Stop(self:DiscordBot & Private)
     for _, t in ipairs(self.__Tasks) do
         task.cancel(t)
     end
@@ -507,6 +531,12 @@ function BotMethods.Stop(self)
     if self.__Gateway then
         self.__Gateway:close(4000)
     end
+
+    while #self.__ActiveChainThreads ~= 0 do
+        task.wait()
+    end
+
+    task.cancel(self.__ProccessorTask)
 
     self.__Started = false
 end
@@ -530,6 +560,8 @@ function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:nu
         __SessionID = nil;
         __GatewayURL = nil;
         __RST = 0;
+        __ChainsToRun = {};
+        __ActiveChainThreads = {};
 
         __ShardList = {};
     }, BotMethods)
