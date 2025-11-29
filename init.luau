@@ -356,12 +356,12 @@ function BotMethods.Start(self)
 
                 if chain then
                     task.spawn(function()
-                        chain:_execute(Packet.d, Packet.t)
+                        chain:_execute(Packet.d, ev)
                     end)
                 elseif self.__ConnectedEvents["undefined"] then
                     local undef = self.__ConnectedEvents["undefined"]
                     task.spawn(function()
-                        undef:_execute(Packet.d, Packet.t)
+                        undef:_execute(Packet.d, ev)
                     end)
                 end
 
