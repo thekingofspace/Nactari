@@ -505,7 +505,7 @@ function BotMethods.Stop(self)
     table.clear(self.__Tasks)
 
     if self.__Gateway then
-        self.__Gateway:close()
+        self.__Gateway:close(4000)
     end
 
     self.__Started = false
