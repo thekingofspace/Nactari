@@ -505,7 +505,7 @@ function BotMethods.Start(self:DiscordBot & Private)
                     self:__SpawnChain(self.__ConnectedEvents["undefined"], Packet.d, ev)
                 end
 
-                local stepChain = self.__ConnectedEvents["signalstep"]
+                local stepChain = self.__ConnectedEvents["signal_step"]
                 if stepChain then
                     task.spawn(function()
                         stepChain:Run()
