@@ -381,6 +381,10 @@ end
 function BotMethods.SendSocket(self, Packet)
     if self.__Started and self.__Gateway then
         self.__Gateway:send(serde.encode(Packet))
+
+        if self:Grab("socket_send") then
+            self:Grab("socket_send"):Run()
+        end
     end
     return self
 end
@@ -421,6 +425,10 @@ function BotMethods.SendContext(self, Method, Path, Body, Headers)
     local ok, decoded = pcall(function()
         return serde.decode("json", ReturnPack.body)
     end)
+
+    if self:Grab("rest_send") then
+        self:Grab("rest_send"):Run(ok and decoded or ReturnPack.body)
+    end
 
     return ok and decoded or ReturnPack.body
 end
