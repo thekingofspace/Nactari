@@ -61,6 +61,7 @@ function Chain:Await()
     end
 
     table.insert(self._awaiting, thread)
+
     local r = { coroutine.yield() }
 
     if #r == 0 then
@@ -73,32 +74,33 @@ function Chain:Await()
 end
 
 function Chain:_execute(...)
-    local ok, results
+    local incoming = { ... }
+    if #incoming > 0 then
+        self._lastResults = incoming
+    end
 
+    local ok, results
     if self._callback then
         ok, results = pcall(function(...)
             return { self._callback(...) }
         end, ...)
     else
         ok = true
-        results = { ... }
+        results = incoming
     end
 
     if ok and results and #results > 0 then
         self._lastResults = results
-    elseif ok and (not results or #results == 0) then
-        self._lastResults = { ... }
     end
 
     if #self._awaiting > 0 then
-        local used = (results and #results > 0)
+        local used = (ok and results and #results > 0)
             and results
-            or (self._lastResults or { ... })
+            or self._lastResults
 
         for _, thread in ipairs(self._awaiting) do
             coroutine.resume(thread, table.unpack(used))
         end
-
         self._awaiting = {}
     end
 
@@ -121,16 +123,17 @@ end
 
 function Chain:_passError(err)
     if self._next and self._next._catch then
-
         local last = self._lastResults or {}
 
         local ok, catchResults = pcall(function()
-            return { self._next._catch(err) }
+            return { self._next._catch(err, table.unpack(last)) }
         end)
+
         if self._next._next and self._next._next._halt then
             return
         end
-        local useResults = nil
+
+        local useResults
 
         if ok then
             if catchResults and #catchResults > 0 then
@@ -159,7 +162,6 @@ function Chain:_passError(err)
 
     return
 end
-
 
 
 local module = {}
