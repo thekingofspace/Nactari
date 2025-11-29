@@ -27,9 +27,9 @@ Event names are normalized to lowercase.
   Fired once for *every* packet processed.
 * **`resume`**
   Fired after sending a resume packet (OP 6).
-  * **`rest_send`**
+* **`rest_send`**
   Fired after sending a rest request.
-  * **`socket_send`**
+* **`socket_send`**
   Fired after sending a socket request.
 
 ### Chainable Events
