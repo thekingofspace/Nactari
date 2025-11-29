@@ -26,13 +26,13 @@ function Chain.new(callback)
     return setmetatable({
         _callback = callback,
         _catch = nil,
+        _halt = false,
         _next = nil,
 
         _lastResults = nil,
         _awaiting = {},
     }, Chain)
 end
-
 
 function Chain:AndThen(fn)
     local nextChain = Chain.new(fn)
@@ -47,6 +47,12 @@ function Chain:Catch(fn)
     return nextChain
 end
 
+function Chain:Halt()
+    local nextChain = Chain.new(nil)
+    nextChain._halt = true
+    self._next = nextChain
+    return nextChain
+end
 
 function Chain:Await()
     local thread = coroutine.running()
@@ -66,8 +72,6 @@ function Chain:Await()
     return table.unpack(r)
 end
 
-
-
 function Chain:_execute(...)
     local ok, results
 
@@ -86,15 +90,10 @@ function Chain:_execute(...)
         self._lastResults = { ... }
     end
 
-
     if #self._awaiting > 0 then
-        local used = nil
-
-        if results and #results > 0 then
-            used = results
-        else
-            used = self._lastResults or { ... }
-        end
+        local used = (results and #results > 0)
+            and results
+            or (self._lastResults or { ... })
 
         for _, thread in ipairs(self._awaiting) do
             coroutine.resume(thread, table.unpack(used))
@@ -103,9 +102,14 @@ function Chain:_execute(...)
         self._awaiting = {}
     end
 
-
     if ok then
         if self._next then
+            if self._next._halt then
+                if self._next._next then
+                    return self._next._next:_execute(table.unpack(results))
+                end
+                return
+            end
             return self._next:_execute(table.unpack(results))
         end
         return
@@ -115,22 +119,37 @@ function Chain:_execute(...)
 end
 
 
-
 function Chain:_passError(err)
     if self._next and self._next._catch then
-        local ok, results = pcall(function()
+
+        local last = self._lastResults or {}
+
+        local ok, catchResults = pcall(function()
             return { self._next._catch(err) }
         end)
+        if self._next._next and self._next._next._halt then
+            return
+        end
+        local useResults = nil
+
         if ok then
+            if catchResults and #catchResults > 0 then
+                useResults = catchResults
+                self._lastResults = catchResults
+            else
+                useResults = last
+            end
+        else
             if self._next._next then
-                return self._next._next:_execute(table.unpack(results))
+                return self._next._next:_passError(catchResults)
             end
             return
         end
 
         if self._next._next then
-            return self._next._next:_passError(results)
+            return self._next._next:_execute(table.unpack(useResults))
         end
+
         return
     end
 
@@ -142,6 +161,7 @@ function Chain:_passError(err)
 end
 
 
+
 local module = {}
 
 local BotMethods = {}
@@ -150,7 +170,8 @@ BotMethods.__index = BotMethods
 export type Chain = {
     AndThen: (self: Chain, fn: (...any) -> ...any) -> Chain,
     Catch: (self: Chain, fn: (err: any, ...any) -> ...any) -> Chain,
-    Await:(self:Chain) -> ...any
+    Await:(self:Chain) -> ...any;
+    Halt:(self:Chain) -> Chain
 }
 
 export type Private = {
