@@ -383,7 +383,9 @@ function BotMethods.SendSocket(self, Packet)
         self.__Gateway:send(serde.encode(Packet))
 
         if self:Grab("socket_send") then
-            self:Grab("socket_send"):Run()
+            task.spawn(function()
+                self:Grab("socket_send"):Run()
+            end)
         end
     end
     return self
@@ -427,7 +429,9 @@ function BotMethods.SendContext(self, Method, Path, Body, Headers)
     end)
 
     if self:Grab("rest_send") then
-        self:Grab("rest_send"):Run(ok and decoded or ReturnPack.body)
+        task.spawn(function()
+            self:Grab("rest_send"):Run(ok and decoded or ReturnPack.body)
+        end)
     end
 
     return ok and decoded or ReturnPack.body
