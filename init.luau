@@ -9,6 +9,8 @@ exposedbots =  exposedbots or {}
 
 CreationBoot = CreationBoot or {}
 
+ExposedMethods = ExposedMethods or {}
+
 local StandardPack = {
     op = 2;
     d = {
@@ -627,8 +629,8 @@ local Methods = {
             return BotMethods[Key]
         end
 
-        if (rawget(self, "__ExposedMethods")::any)[Key] then
-            return (rawget(self, "__ExposedMethods")::any)[Key]
+        if ExposedMethods[Key] then
+            return ExposedMethods[Key] 
         end
 
         return rawget(self, Key)
@@ -653,8 +655,6 @@ function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:nu
         __ChainsToRun = {};
         __ActiveChainThreads = {};
 
-        __ExposedMethods = {};
-
         __ShardList = {};
     }, Methods)
 
@@ -668,4 +668,3 @@ function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:nu
 end
 
 return module
-
