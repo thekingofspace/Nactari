@@ -5,6 +5,8 @@ local serde = require("@lune/serde")
 local GatewayURL = "wss://gateway.discord.gg/?v=10&encoding=json"
 local EndPoint = "https://discord.com/api/v10"
 
+exposedbots = {}
+
 local StandardPack = {
     op = 2;
     d = {
@@ -302,7 +304,8 @@ export type Chain = {
     Catch: (self: Chain, fn: (err: any, ...any) -> ...any) -> Chain,
     Await:(self:Chain) -> ...any;
     Halt:(self:Chain) -> Chain;
-    Throw:(self:Chain, fn: (err: any, ...any) -> boolean) -> Chain
+    Throw:(self:Chain, fn: (err: any, ...any) -> boolean) -> Chain;
+    Run:(self:Chain, ...any) -> nil
 }
 
 export type Private = {
@@ -456,6 +459,9 @@ end
 
 function BotMethods.Start(self:DiscordBot & Private)
     if self.__Started then return end
+    if self:Grab("Start") then
+        (self:Grab("Start")::Chain):Run()
+    end
     self.__Started = true
 
     local url = self.__GatewayURL or GatewayURL
@@ -561,6 +567,10 @@ function BotMethods.Start(self:DiscordBot & Private)
         end
     end)
 
+    if self:Grab("Started") then
+        (self:Grab("Started")::Chain):Run()
+    end
+
     return self
 end
 
@@ -569,6 +579,10 @@ function BotMethods.__SpawnChain(self:DiscordBot & Private, Chain, ...)
 end
 
 function BotMethods.Stop(self:DiscordBot & Private)
+    if self:Grab("Stop") then
+        (self:Grab("Stop")::Chain):Run()
+    end
+
     for _, t in ipairs(self.__Tasks) do
         task.cancel(t)
     end
@@ -585,10 +599,22 @@ function BotMethods.Stop(self:DiscordBot & Private)
     task.cancel(self.__ProccessorTask)
 
     self.__Started = false
+
+    if self:Grab("Stopped") then
+        (self:Grab("Stopped")::Chain):Run()
+    end
 end
 
 function BotMethods.GetShards(self)
     return self.__ShardList
+end
+
+function module.FromGlobal(Token:string):DiscordBot?
+    if exposedbots[Token] then
+        return exposedbots[Token]
+    end
+
+    return
 end
 
 function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:number?):DiscordBot
@@ -611,6 +637,8 @@ function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:nu
 
         __ShardList = {};
     }, BotMethods)
+
+    exposedbots[Token] = self
 
     return self
 end
