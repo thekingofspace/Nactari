@@ -5,7 +5,7 @@ local serde = require("@lune/serde")
 local GatewayURL = "wss://gateway.discord.gg/?v=10&encoding=json"
 local EndPoint = "https://discord.com/api/v10"
 
-exposedbots = {}
+exposedbots =  exposedbots or {}
 
 local StandardPack = {
     op = 2;
