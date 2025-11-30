@@ -32,6 +32,19 @@ Event names are normalized to lowercase.
 * **`socket_send`**
   Fired after sending a socket request.
 
+* **`start`**
+  Fired immediately before the bot begins connecting to the gateway.
+
+* **`started`**
+  Fired after the bot has fully initialized and begun processing events.
+
+* **`stop`**
+  Fired immediately before the bot begins shutting down.
+
+* **`stopped`**
+  Fired after the bot has fully shut down and all tasks have ended.
+
+
 ### Chainable Events
 
 All event handlers return a **Chain** object which allows:
@@ -199,3 +212,60 @@ This:
 * Cancels all running task threads
 * Closes the WebSocket
 * Clears internal state
+
+## Global Bot Registry
+
+Every bot created through:
+
+```lua
+local Bot = Discord.New(intents, token, shardID?, shardCount?)
+```
+
+is automatically registered inside a globally accessible table:
+
+```lua
+exposedbots[token] = Bot
+```
+
+### Purpose
+
+`exposedbots` provides a **central lookup** for all active bot instances across your entire runtime.
+This is especially useful when:
+
+* You need to access a bot reference from outside the file that created it
+* You are managing multiple shards and want an easy global map
+* You want utilities or modules to retrieve a bot without circular dependencies
+* You want debugging tools that can list or inspect active connections
+
+### Structure
+
+`exposedbots` is a simple dictionary:
+
+```lua
+{
+    ["TOKEN_STRING"] = DiscordBot,
+    ["ANOTHER_TOKEN"] = DiscordBot,
+    ...
+}
+```
+
+Each entry points directly to the bot object containing:
+
+* Token
+* Intents
+* Shard ID & Count
+* Gateway connection handle
+* Tasks
+* Registered events
+* Chains waiting to run
+* Resume/session state
+
+### Example Usage
+
+```lua
+local MyBot = exposedbots["MY_BOT_TOKEN"]
+if MyBot then
+    print("Shard:", MyBot.ShardID)
+end
+```
+
