@@ -7,7 +7,7 @@ local EndPoint = "https://discord.com/api/v10"
 
 exposedbots =  exposedbots or {}
 
-CreationBoot = {}
+CreationBoot = CreationBoot or {}
 
 local StandardPack = {
     op = 2;
@@ -668,3 +668,4 @@ function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:nu
 end
 
 return module
+
