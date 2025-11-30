@@ -7,6 +7,8 @@ local EndPoint = "https://discord.com/api/v10"
 
 exposedbots =  exposedbots or {}
 
+CreationBoot = {}
+
 local StandardPack = {
     op = 2;
     d = {
@@ -617,6 +619,22 @@ function module.FromGlobal(Token:string):DiscordBot?
     return
 end
 
+local Methods = {
+    __newindex = rawset;
+
+    __index = function(self, Key)
+        if BotMethods[Key] then
+            return BotMethods[Key]
+        end
+
+        if (rawget(self, "__ExposedMethods")::any)[Key] then
+            return (rawget(self, "__ExposedMethods")::any)[Key]
+        end
+
+        return rawget(self, Key)
+    end
+}
+
 function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:number?):DiscordBot
     local self = setmetatable({
         Intents = Intents;
@@ -635,8 +653,14 @@ function module.New(Intents:number, Token:string, ShardID:number?, ShardCount:nu
         __ChainsToRun = {};
         __ActiveChainThreads = {};
 
+        __ExposedMethods = {};
+
         __ShardList = {};
-    }, BotMethods)
+    }, Methods)
+
+    for I, item in ipairs(CreationBoot) do
+        item(self)
+    end
 
     exposedbots[Token] = self
 
