@@ -378,11 +378,15 @@ end
 
 function BotMethods.On(self, Event, Callback)
     local ev = Event:lower()
+    
+    if self.__ConnectedEvents[ev] then
+        return self.__ConnectedEvents[ev]:AndThen(Callback)
+    else
+        local chain = Chain.new(Callback)
+        self.__ConnectedEvents[ev] = chain
 
-    local chain = Chain.new(Callback)
-    self.__ConnectedEvents[ev] = chain
-
-    return chain
+        return chain
+    end
 end
 
 function BotMethods.SendSocket(self, Packet)
