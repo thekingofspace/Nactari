@@ -32,18 +32,16 @@ local function cloneNode(node, parent)
     local new = setmetatable({
         _callback    = node._callback,
         _catch       = node._catch,
-        _halt        = node._halt,
+   	_halt        = node._halt,
         _throw       = node._throw,
-
         _next        = nil,
         _parent      = parent,
-
         _lastResults = nil,
         _awaiting    = nil,
         _root        = node._root or node,
         _catch_ran   = false,
-
         __destroyed  = false,
+        _didHaltOrThrow = false,
     }, Chain)
 
     if node._next then
@@ -60,17 +58,17 @@ function Chain.new(callback)
         _halt     = false,
         _throw    = nil,
         _next     = nil,
-
         _waiters  = {},
         _parent   = nil,
         _root     = nil,
         _catch_ran = false,
+        _toend = nil,
+        _didHaltOrThrow = false,
     }, Chain)
 
     root._root = root
     return root
 end
-
 
 function Chain:AndThen(fn)
     local next = Chain.new(fn)
@@ -107,6 +105,10 @@ function Chain:Throw(fn)
     return next
 end
 
+function Chain:ToEnd(fn)
+    self._root._toend = fn
+    return self
+end
 
 function Chain:Await()
     if self._root ~= self then
@@ -124,11 +126,9 @@ function Chain:Await()
     return coroutine.yield()
 end
 
-
 function Chain:spawn()
     return cloneNode(self._root, nil)
 end
-
 
 local function destroyChain(runtime)
     if runtime.__destroyed then return end
@@ -142,22 +142,36 @@ local function destroyChain(runtime)
     runtime._catch = nil
     runtime._throw = nil
     runtime._next = nil
-
     runtime._parent = nil
     runtime._lastResults = nil
     runtime._awaiting = nil
     runtime._root = nil
     runtime._catch_ran = nil
+    runtime._didHaltOrThrow = nil
 
     if runtime._waiters then
         runtime._waiters = nil
     end
 end
 
+function Chain:_runToEndIfAllowed(results)
+    local root = self._root
+    if root and root._toend and not root._didHaltOrThrow then
+        local ok, out = pcall(function()
+            return { root._toend(table.unpack(results or {})) }
+        end)
+        if ok and out and #out > 0 then
+            return out
+        end
+    end
+    return results
+end
+
 function Chain:_finish(results)
     if self.__destroyed then return end
 
     local root = self._root
+
     if root and root._waiters then
         local waiter = table.remove(root._waiters, 1)
 
@@ -174,12 +188,14 @@ function Chain:_finish(results)
         end
     end
 
+    local final = self:_runToEndIfAllowed(results)
     destroyChain(self)
-    return results
+    return final
 end
 
 function Chain:_passError(err)
     if self.__destroyed then return end
+    self._root._didHaltOrThrow = true
 
     if self._next and self._next._catch then
         local last = self._lastResults or {}
@@ -223,9 +239,7 @@ function Chain:_passError(err)
     return self:_finish(self._lastResults or {})
 end
 
-
 function Chain:_execute(...)
-
     if self.__destroyed then return end
 
     local incoming = { ... }
@@ -234,8 +248,8 @@ function Chain:_execute(...)
     end
 
     if self._halt then
+        self._root._didHaltOrThrow = true
         local p = self._parent
-
         if p and p._catch and p._catch_ran == true then
             return self:_finish(self._lastResults)
         end
@@ -249,6 +263,7 @@ function Chain:_execute(...)
         end)
 
         if not ok or not continue then
+            self._root._didHaltOrThrow = true
             return self:_finish(parentResults)
         end
     end
@@ -279,7 +294,6 @@ function Chain:_execute(...)
     return self:_passError(results)
 end
 
-
 function Chain:Run(...)
     local runtime = self:spawn()
     return runtime:_execute(...)
@@ -309,7 +323,8 @@ export type Chain = {
     Await:(self:Chain) -> ...any;
     Halt:(self:Chain) -> Chain;
     Throw:(self:Chain, fn: (err: any, ...any) -> boolean) -> Chain;
-    Run:(self:Chain, ...any) -> nil
+    ToEnd:(self:Chain, fn: (...any) -> ...any) -> Chain;
+    Run:(self:Chain, ...any) -> nil;
 }
 
 export type Private = {
